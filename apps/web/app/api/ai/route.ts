@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY || "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";
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 async function callGroq(prompt: string): Promise<string> {
