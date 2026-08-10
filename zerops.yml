@@ -1,41 +1,47 @@
-project:
-  name: nexus
-  region: fra
-
-services:
-  - name: nexus
-    type: nextjs@14
-    mode: CONTAINER
+zerops:
+  - setup: prod
     build:
-      baseImage: node:20-alpine
+      base: nodejs@22
       buildCommands:
-        - corepack enable
-        - corepack prepare pnpm@8 --activate
-        - pnpm install
-        - pnpm run build
-    runtime:
+        - cd apps/web
+        - npm ci
+        - npm run build
+      deployFiles:
+        - apps/web/.next/standalone
+        - apps/web/.next/static
+        - apps/web/public
+      cache:
+        - apps/web/node_modules
+
+    run:
+      base: nodejs@22
+      ports:
+        - port: 3000
+          httpSupport: true
       envVariables:
         NODE_ENV: production
-        NEXT_TELEMETRY_DISABLED: "1"
-        DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/nexus?sslmode=require
+        DATABASE_URL: postgresql://${db_user}:${db_password}@${db_hostname}:5432/nexus?sslmode=require
         GROQ_API_KEY: ${GROQ_API_KEY}
-    scaling:
-      minContainers: 1
-      maxContainers: 3
-      metric: cpu
-      target: 70
-    healthCheck:
-      path: /
-      interval: 10
-      timeout: 5
-    domains:
-      - nexus.zerops.app
+      start: node apps/web/.next/standalone/server.js
 
-  - name: db
-    type: postgresql@16
-    mode: CONTAINER
-    configuration:
-      version: "16"
-      cpu: 1
-      ram: 2GB
-      storage: 10GB
+  - setup: dev
+    build:
+      base: nodejs@22
+      os: ubuntu
+      buildCommands:
+        - cd apps/web
+        - npm install
+      deployFiles: ./
+      cache:
+        - apps/web/node_modules
+    run:
+      base: nodejs@22
+      os: ubuntu
+      ports:
+        - port: 3000
+          httpSupport: true
+      envVariables:
+        NODE_ENV: development
+        DATABASE_URL: postgresql://${db_user}:${db_password}@${db_hostname}:5432/nexus?sslmode=disable
+        GROQ_API_KEY: ${GROQ_API_KEY}
+      start: cd apps/web && npx next dev -H 0.0.0.0
