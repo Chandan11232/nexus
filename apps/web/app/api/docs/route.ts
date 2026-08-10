@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || "postgresql://docuflow:docuflow@database:5432/docuflow?sslmode=disable",
-});
+import pool, { ensureTable } from "@/lib/db";
 
 export async function GET() {
   try {
+    await ensureTable();
     const result = await pool.query(
       "SELECT id, title, created_at, updated_at FROM documents ORDER BY updated_at DESC"
     );
@@ -18,16 +15,14 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const title = body.title || "Untitled";
-    const content = body.content || "";
+    await ensureTable();
+    const { title, content } = await req.json();
     const result = await pool.query(
       "INSERT INTO documents (title, content) VALUES ($1, $2) RETURNING id, title, content, created_at, updated_at",
-      [title, content]
+      [title || "Untitled", content || ""]
     );
     return NextResponse.json(result.rows[0]);
   } catch (error: any) {
-    console.error("POST /api/docs error:", error);
-    return NextResponse.json({ error: error.message || "Unknown error" }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
