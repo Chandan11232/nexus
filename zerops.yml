@@ -1,0 +1,41 @@
+project:
+  name: nexus
+  region: fra
+
+services:
+  - name: nexus
+    type: nextjs@14
+    mode: CONTAINER
+    build:
+      baseImage: node:20-alpine
+      buildCommands:
+        - corepack enable
+        - corepack prepare pnpm@8 --activate
+        - pnpm install
+        - pnpm run build
+    runtime:
+      envVariables:
+        NODE_ENV: production
+        NEXT_TELEMETRY_DISABLED: "1"
+        DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/nexus?sslmode=require
+        GROQ_API_KEY: ${GROQ_API_KEY}
+    scaling:
+      minContainers: 1
+      maxContainers: 3
+      metric: cpu
+      target: 70
+    healthCheck:
+      path: /
+      interval: 10
+      timeout: 5
+    domains:
+      - nexus.zerops.app
+
+  - name: db
+    type: postgresql@16
+    mode: CONTAINER
+    configuration:
+      version: "16"
+      cpu: 1
+      ram: 2GB
+      storage: 10GB

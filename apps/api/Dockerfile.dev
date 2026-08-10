@@ -1,0 +1,12 @@
+FROM golang:1.22-alpine
+
+ENV GOPROXY=https://proxy.golang.org,direct
+ENV GONOSUMDB=*
+
+RUN apk add --no-cache git
+
+WORKDIR /app
+
+COPY . .
+
+CMD ["echo", "API needs go.sum generation - skipping for now"]

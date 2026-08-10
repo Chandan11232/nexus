@@ -1,0 +1,246 @@
+version: "3.9"
+
+services:
+  # ─────────────────────────────────────────────
+  # FRONTEND - Next.js with Turbopack
+  # ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
+      - API_URL=http://localhost:8080
+      - DATABASE_URL=postgresql://docuflow:docuflow@database:5432/docuflow?sslmode=disable
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - docuflow-local
+
+  # ─────────────────────────────────────────────
+  # API - Go with Air for hot reload
+  # ─────────────────────────────────────────────
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=development
+      - PORT=8080
+      - DATABASE_URL=postgresql://docuflow:docuflow@localhost:5432/docuflow?sslmode=disable
+      - DATABASE_READ_URL=postgresql://docuflow:docuflow@localhost:5432/docuflow?sslmode=disable
+      - REDIS_URL=redis://localhost:6379
+      - RABBITMQ_URL=amqp://docuflow:docuflow@localhost:5672
+      - JWT_SECRET=dev-secret-change-in-production-min-32-chars
+      - JWT_REFRESH_SECRET=dev-refresh-secret-change-in-production-min-32-chars
+      - FRONTEND_URL=http://localhost:3000
+      - STORAGE_ENDPOINT=http://localhost:9000
+      - STORAGE_ACCESS_KEY=minioadmin
+      - STORAGE_SECRET_KEY=minioadmin
+      - STORAGE_BUCKET=docuflow-assets
+    volumes:
+      - ./apps/api:/app
+    depends_on:
+      - database
+      - redis
+      - rabbitmq
+      - storage
+    networks:
+      - docuflow-local
+    profiles:
+      - full
+
+  # ─────────────────────────────────────────────
+  # WORKERS - Python with watchgod for hot reload
+  # ─────────────────────────────────────────────
+  workers:
+    build:
+      context: ./apps/workers
+      dockerfile: Dockerfile.dev
+    environment:
+      - ENV=development
+      - DATABASE_URL=postgresql://docuflow:docuflow@localhost:5432/docuflow?sslmode=disable
+      - DATABASE_READ_URL=postgresql://docuflow:docuflow@localhost:5433/docuflow?sslmode=disable
+      - REDIS_URL=redis://localhost:6379
+      - RABBITMQ_URL=amqp://docuflow:docuflow@localhost:5672
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - STORAGE_ENDPOINT=http://localhost:9000
+      - STORAGE_ACCESS_KEY=minioadmin
+      - STORAGE_SECRET_KEY=minioadmin
+      - STORAGE_BUCKET=docuflow-assets
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      - GROQ_MODEL=llama-3.1-70b-versatile
+    volumes:
+      - ./apps/workers:/app
+    depends_on:
+      - database
+      - redis
+      - rabbitmq
+      - storage
+    networks:
+      - docuflow-local
+    profiles:
+      - full
+
+  # ─────────────────────────────────────────────
+  # DATABASE - PostgreSQL with pgvector
+  # ─────────────────────────────────────────────
+  database:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=docuflow
+      - POSTGRES_PASSWORD=docuflow
+      - POSTGRES_DB=docuflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./packages/db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuflow -d docuflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docuflow-local
+
+  # ─────────────────────────────────────────────
+  # READ REPLICA - For local testing of read routing
+  # ─────────────────────────────────────────────
+  database-read:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=docuflow
+      - POSTGRES_PASSWORD=docuflow
+      - POSTGRES_DB=docuflow
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c hot_standby=on
+    volumes:
+      - postgres_read_data:/var/lib/postgresql/data
+    depends_on:
+      - database
+    networks:
+      - docuflow-local
+
+  # ─────────────────────────────────────────────
+  # REDIS - Valkey for pub/sub, caching
+  # ─────────────────────────────────────────────
+  redis:
+    image: valkey/valkey:7-alpine
+    ports:
+      - "6379:6379"
+    command: valkey-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - docuflow-local
+
+  # ─────────────────────────────────────────────
+  # RABBITMQ - Message broker
+  # ─────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=docuflow
+      - RABBITMQ_DEFAULT_PASS=docuflow
+      - RABBITMQ_DEFAULT_VHOST=docuflow
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docuflow-local
+
+  # ─────────────────────────────────────────────
+  # STORAGE - MinIO (S3-compatible)
+  # ─────────────────────────────────────────────
+  storage:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docuflow-local
+
+  # ─────────────────────────────────────────────
+  # MINIO SETUP - Create buckets on startup
+  # ─────────────────────────────────────────────
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      - storage
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc config host add minio http://storage:9000 minioadmin minioadmin) do echo 'waiting for minio...' && sleep 2; done;
+      /usr/bin/mc mb --ignore-existing minio/docuflow-assets;
+      /usr/bin/mc mb --ignore-existing minio/docuflow-published;
+      /usr/bin/mc anonymous set public minio/docuflow-published;
+      /usr/bin/mc policy set public minio/docuflow-published;
+      echo 'MinIO buckets ready!'
+      "
+    networks:
+      - docuflow-local
+
+  # ─────────────────────────────────────────────
+  # EDGE SIMULATION - Nginx for cache purge testing
+  # ─────────────────────────────────────────────
+  edge:
+    image: nginx:alpine
+    ports:
+      - "8081:80"
+    volumes:
+      - ./docker/nginx.edge.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - storage
+    networks:
+      - docuflow-local
+
+volumes:
+  postgres_data:
+  postgres_read_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+
+networks:
+  docuflow-local:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
